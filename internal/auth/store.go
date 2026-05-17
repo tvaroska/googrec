@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,18 +32,57 @@ func AuthFilePath() string {
 }
 
 func Load() (*AuthData, error) {
+	var a *AuthData
+
 	data, err := os.ReadFile(AuthFilePath())
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
-		return nil, err
+	} else {
+		var parsed AuthData
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			return nil, fmt.Errorf("corrupt auth file: %w", err)
+		}
+		a = &parsed
 	}
-	var auth AuthData
-	if err := json.Unmarshal(data, &auth); err != nil {
-		return nil, fmt.Errorf("corrupt auth file: %w", err)
+
+	a = applyEnvOverrides(a)
+
+	return a, nil
+}
+
+func applyEnvOverrides(a *AuthData) *AuthData {
+	envCookies := os.Getenv("GOOGREC_COOKIES")
+	envAPIKey := os.Getenv("GOOGREC_API_KEY")
+	envAuthUser := os.Getenv("GOOGREC_AUTHUSER")
+
+	if envCookies == "" && envAPIKey == "" && envAuthUser == "" {
+		return a
 	}
-	return &auth, nil
+
+	if a == nil {
+		a = &AuthData{}
+	}
+
+	if envCookies != "" {
+		a.Cookies = envCookies
+		if sapisid, err := ExtractSAPISID(envCookies); err == nil {
+			a.SAPISID = sapisid
+		}
+	}
+
+	if envAPIKey != "" {
+		a.APIKey = envAPIKey
+	}
+
+	if envAuthUser != "" {
+		if n, err := strconv.Atoi(envAuthUser); err == nil {
+			a.AuthUser = n
+		}
+	}
+
+	return a
 }
 
 func Save(cookies string, authUser int, apiKey string) error {

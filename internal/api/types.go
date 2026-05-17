@@ -29,9 +29,9 @@ type TranscriptSegment struct {
 }
 
 type AudioResult struct {
-	Data        []byte
-	ContentType string
-	Filename    string
+	ContentType  string
+	Filename     string
+	BytesWritten int64
 }
 
 func FormatDuration(ms int64) string {

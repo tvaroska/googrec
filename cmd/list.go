@@ -29,7 +29,7 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 
-			recordings, err := client.ListRecordings(limit)
+			recordings, err := client.ListRecordings(cmd.Context(), limit)
 			if err != nil {
 				return err
 			}

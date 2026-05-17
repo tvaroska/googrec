@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,11 +26,11 @@ func safeFilename(title string, maxLen int) string {
 }
 
 type bulkConfig struct {
-	outDir      string
-	limit       int
-	since       string
+	outDir       string
+	limit        int
+	since        string
 	skipExisting bool
-	concurrency int
+	concurrency  int
 }
 
 func filterBySince(recordings []api.Recording, since string) ([]api.Recording, error) {
@@ -59,18 +61,22 @@ type downloadJob struct {
 }
 
 type downloadResult struct {
-	index   int
-	title   string
-	status  string // "done", "skipped", "failed"
-	detail  string
+	index  int
+	title  string
+	status string
+	detail string
 }
 
 func runBulkDownload(
+	parent context.Context,
 	client *api.Client,
 	cfg bulkConfig,
 	ext string,
 	downloadFn func(client *api.Client, r api.Recording, filepath string) (string, error),
 ) error {
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt)
+	defer stop()
+
 	outDir, err := filepath.Abs(cfg.outDir)
 	if err != nil {
 		return err
@@ -80,7 +86,7 @@ func runBulkDownload(
 	}
 
 	fmt.Printf("Fetching recording list (limit: %d)...\n", cfg.limit)
-	recordings, err := client.ListRecordings(cfg.limit)
+	recordings, err := client.ListRecordings(ctx, cfg.limit)
 	if err != nil {
 		return err
 	}
@@ -95,7 +101,6 @@ func runBulkDownload(
 		return nil
 	}
 
-	// Build jobs
 	var jobs []downloadJob
 	var skippedExisting int
 	for i, r := range recordings {
@@ -136,6 +141,10 @@ func runBulkDownload(
 		go func() {
 			defer wg.Done()
 			for job := range jobCh {
+				if ctx.Err() != nil {
+					resultCh <- downloadResult{job.index, job.recording.Title, "skipped", "cancelled"}
+					continue
+				}
 				detail, err := downloadFn(client, job.recording, job.filepath)
 				if err != nil {
 					resultCh <- downloadResult{job.index, job.recording.Title, "failed", err.Error()}

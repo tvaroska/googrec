@@ -26,7 +26,7 @@ func newTranscriptCmd() *cobra.Command {
 				return err
 			}
 
-			transcript, err := client.GetTranscript(args[0])
+			transcript, err := client.GetTranscript(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}

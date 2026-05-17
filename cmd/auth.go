@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -31,10 +32,10 @@ func newAuthCmd() *cobra.Command {
 			}
 
 			if check {
-				return runAuthCheck()
+				return runAuthCheck(cmd.Context())
 			}
 
-			return runAuthSetup(authuser)
+			return runAuthSetup(cmd.Context(), authuser)
 		},
 	}
 
@@ -45,7 +46,7 @@ func newAuthCmd() *cobra.Command {
 	return cmd
 }
 
-func runAuthCheck() error {
+func runAuthCheck(ctx context.Context) error {
 	a, err := auth.Load()
 	if err != nil {
 		return err
@@ -66,7 +67,7 @@ func runAuthCheck() error {
 		fmt.Printf("Authentication invalid: %v\n", err)
 		os.Exit(1)
 	}
-	if err := client.TestAuth(); err != nil {
+	if err := client.TestAuth(ctx); err != nil {
 		fmt.Printf("Authentication failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -74,7 +75,7 @@ func runAuthCheck() error {
 	return nil
 }
 
-func runAuthSetup(authUser int) error {
+func runAuthSetup(ctx context.Context, authUser int) error {
 	fmt.Println("Google Recorder Authentication")
 	fmt.Println("==============================")
 	fmt.Println()
@@ -123,7 +124,7 @@ func runAuthSetup(authUser int) error {
 			fmt.Printf("Warning: %v\n", err)
 			return nil
 		}
-		if err := client.TestAuth(); err != nil {
+		if err := client.TestAuth(ctx); err != nil {
 			fmt.Printf("Authentication test failed: %v\n", err)
 			fmt.Println("Cookies saved but may be invalid. Try re-authenticating.")
 		} else {

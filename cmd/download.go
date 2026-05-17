@@ -43,14 +43,14 @@ func newDownloadCmd() *cobra.Command {
 				ext = "json"
 			}
 
-			return runBulkDownload(client, bulkConfig{
+			return runBulkDownload(cmd.Context(), client, bulkConfig{
 				outDir:       outDir,
 				limit:        limit,
 				since:        since,
 				skipExisting: skipExisting,
 				concurrency:  concurrency,
 			}, ext, func(client *api.Client, r api.Recording, filepath string) (string, error) {
-				transcript, err := client.GetTranscript(r.ID)
+				transcript, err := client.GetTranscript(cmd.Context(), r.ID)
 				if err != nil {
 					return "", err
 				}

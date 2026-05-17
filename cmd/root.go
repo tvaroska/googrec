@@ -4,10 +4,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	jsonOutput bool
-)
-
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "googrec",

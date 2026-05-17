@@ -107,6 +107,69 @@ func TestLoadMissing(t *testing.T) {
 	}
 }
 
+func TestEnvOverrides(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	// No file, no env — nil
+	auth, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if auth != nil {
+		t.Fatal("expected nil with no file and no env")
+	}
+
+	// No file, env set — creates AuthData from env
+	t.Setenv("GOOGREC_COOKIES", "SID=x; SAPISID=envvalue; HSID=y")
+	t.Setenv("GOOGREC_API_KEY", "env-key")
+	t.Setenv("GOOGREC_AUTHUSER", "2")
+
+	auth, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if auth == nil {
+		t.Fatal("expected non-nil with env vars set")
+	}
+	if auth.SAPISID != "envvalue" {
+		t.Errorf("SAPISID = %q, want %q", auth.SAPISID, "envvalue")
+	}
+	if auth.APIKey != "env-key" {
+		t.Errorf("APIKey = %q, want %q", auth.APIKey, "env-key")
+	}
+	if auth.AuthUser != 2 {
+		t.Errorf("AuthUser = %d, want 2", auth.AuthUser)
+	}
+}
+
+func TestEnvOverridesFile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	// Save file with one set of values
+	err := Save("SAPISID=fileval", 0, "file-key")
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Env overrides API key but not cookies
+	t.Setenv("GOOGREC_API_KEY", "env-key")
+	t.Setenv("GOOGREC_COOKIES", "")
+	t.Setenv("GOOGREC_AUTHUSER", "")
+
+	auth, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if auth.APIKey != "env-key" {
+		t.Errorf("APIKey = %q, want env override %q", auth.APIKey, "env-key")
+	}
+	if auth.SAPISID != "fileval" {
+		t.Errorf("SAPISID = %q, want file value %q", auth.SAPISID, "fileval")
+	}
+}
+
 func TestSavePreservesAPIKey(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

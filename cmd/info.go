@@ -24,7 +24,7 @@ func newInfoCmd() *cobra.Command {
 				return err
 			}
 
-			recordings, err := client.ListRecordings(100)
+			recordings, err := client.ListRecordings(cmd.Context(), 100)
 			if err != nil {
 				return err
 			}

@@ -30,21 +30,25 @@ func newDownloadAudioCmd() *cobra.Command {
 				return err
 			}
 
-			return runBulkDownload(client, bulkConfig{
+			return runBulkDownload(cmd.Context(), client, bulkConfig{
 				outDir:       outDir,
 				limit:        limit,
 				since:        since,
 				skipExisting: skipExisting,
 				concurrency:  concurrency,
 			}, "m4a", func(client *api.Client, r api.Recording, filepath string) (string, error) {
-				result, err := client.GetAudio(r.ID)
+				f, err := os.Create(filepath)
 				if err != nil {
 					return "", err
 				}
-				if err := os.WriteFile(filepath, result.Data, 0644); err != nil {
+				defer f.Close()
+
+				result, err := client.GetAudio(cmd.Context(), r.ID, f)
+				if err != nil {
+					os.Remove(filepath)
 					return "", err
 				}
-				sizeMB := float64(len(result.Data)) / (1024 * 1024)
+				sizeMB := float64(result.BytesWritten) / (1024 * 1024)
 				return fmt.Sprintf("done (%.1f MB)", sizeMB), nil
 			})
 		},

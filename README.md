@@ -53,6 +53,18 @@ googrec auth --authuser 1
 googrec auth --api-key <key>
 ```
 
+### Environment variables
+
+For non-interactive use (agents, CI, scripts), set credentials via environment variables instead of `googrec auth`:
+
+```bash
+export GOOGREC_COOKIES="<cookie header value>"
+export GOOGREC_API_KEY="<api key>"
+export GOOGREC_AUTHUSER=0  # optional, default 0
+```
+
+Environment variables override the auth file. No auth file is needed when all required env vars are set.
+
 ## Commands
 
 ### List recordings

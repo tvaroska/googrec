@@ -9,6 +9,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func envOrNone(key string) string {
+	if v := os.Getenv(key); v != "" {
+		return "set"
+	}
+	return "not set"
+}
+
 func newConfigCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "config",
@@ -46,6 +53,12 @@ func newConfigCmd() *cobra.Command {
 				fmt.Printf("Has SAPISID:  %v\n", a.SAPISID != "")
 				fmt.Printf("Has API key:  %v\n", a.APIKey != "")
 			}
+
+			fmt.Println()
+			fmt.Println("Environment overrides:")
+			fmt.Printf("  GOOGREC_COOKIES:  %s\n", envOrNone("GOOGREC_COOKIES"))
+			fmt.Printf("  GOOGREC_API_KEY:  %s\n", envOrNone("GOOGREC_API_KEY"))
+			fmt.Printf("  GOOGREC_AUTHUSER: %s\n", envOrNone("GOOGREC_AUTHUSER"))
 
 			return nil
 		},

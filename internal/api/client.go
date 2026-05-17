@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,10 @@ const (
 	origin  = "https://recorder.google.com"
 )
 
-var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var (
+	uuidRe       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	cdFilenameRe = regexp.MustCompile(`filename="?([^";\n]+)"?`)
+)
 
 func ValidateUUID(id string) error {
 	if !uuidRe.MatchString(strings.ToLower(id)) {
@@ -59,14 +63,14 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
-func (c *Client) rpcRequest(method string, body any) ([]byte, error) {
+func (c *Client) rpcRequest(ctx context.Context, method string, body any) ([]byte, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 
 	url := apiBase + "/" + method
-	req, err := http.NewRequest("POST", url, strings.NewReader(string(payload)))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(payload)))
 	if err != nil {
 		return nil, err
 	}
@@ -102,14 +106,14 @@ func (c *Client) rpcRequest(method string, body any) ([]byte, error) {
 	return respBody, nil
 }
 
-func (c *Client) ListRecordings(limit int) ([]Recording, error) {
+func (c *Client) ListRecordings(ctx context.Context, limit int) ([]Recording, error) {
 	nowSec := time.Now().Unix()
 	body := []any{
 		[]any{map[string]any{"1": nowSec}},
 		limit,
 	}
 
-	data, err := c.rpcRequest("GetRecordingList", body)
+	data, err := c.rpcRequest(ctx, "GetRecordingList", body)
 	if err != nil {
 		return nil, err
 	}
@@ -199,12 +203,12 @@ func parseTimestamp(ts []json.RawMessage) int64 {
 	return sec*1000 + int64(nano)/1_000_000
 }
 
-func (c *Client) GetTranscript(recordingID string) (*Transcript, error) {
+func (c *Client) GetTranscript(ctx context.Context, recordingID string) (*Transcript, error) {
 	if err := ValidateUUID(recordingID); err != nil {
 		return nil, err
 	}
 
-	data, err := c.rpcRequest("GetTranscription", []any{recordingID})
+	data, err := c.rpcRequest(ctx, "GetTranscription", []any{recordingID})
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +304,7 @@ func (c *Client) GetTranscript(recordingID string) (*Transcript, error) {
 	}, nil
 }
 
-func (c *Client) GetAudio(recordingID string) (*AudioResult, error) {
+func (c *Client) GetAudio(ctx context.Context, recordingID string, dest io.Writer) (*AudioResult, error) {
 	if err := ValidateUUID(recordingID); err != nil {
 		return nil, err
 	}
@@ -308,7 +312,7 @@ func (c *Client) GetAudio(recordingID string) (*AudioResult, error) {
 	url := fmt.Sprintf("https://usercontent.recorder.google.com/download/playback/%s?authuser=%d&download=true",
 		recordingID, c.auth.AuthUser)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -322,17 +326,12 @@ func (c *Client) GetAudio(recordingID string) (*AudioResult, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		preview := string(body)
+		errBody, _ := io.ReadAll(resp.Body)
+		preview := string(errBody)
 		if len(preview) > 200 {
 			preview = preview[:200]
 		}
 		return nil, fmt.Errorf("audio download: %d %s — %s", resp.StatusCode, resp.Status, preview)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read audio: %w", err)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -342,19 +341,24 @@ func (c *Client) GetAudio(recordingID string) (*AudioResult, error) {
 
 	filename := recordingID + ".m4a"
 	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
-		if m := regexp.MustCompile(`filename="?([^";\n]+)"?`).FindStringSubmatch(cd); m != nil {
+		if m := cdFilenameRe.FindStringSubmatch(cd); m != nil {
 			filename = m[1]
 		}
 	}
 
+	n, err := io.Copy(dest, resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("stream audio: %w", err)
+	}
+
 	return &AudioResult{
-		Data:        data,
-		ContentType: contentType,
-		Filename:    filename,
+		ContentType:  contentType,
+		Filename:     filename,
+		BytesWritten: n,
 	}, nil
 }
 
-func (c *Client) TestAuth() error {
-	_, err := c.ListRecordings(1)
+func (c *Client) TestAuth(ctx context.Context) error {
+	_, err := c.ListRecordings(ctx, 1)
 	return err
 }
