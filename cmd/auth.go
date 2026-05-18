@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tvaroska/googrec/internal/api"
 	"github.com/tvaroska/googrec/internal/auth"
@@ -59,6 +61,9 @@ func runAuthCheck(ctx context.Context) error {
 	fmt.Printf("Auth file:  %s\n", auth.AuthFilePath())
 	fmt.Printf("Auth user:  %d\n", a.AuthUser)
 	fmt.Printf("Saved at:   %s\n", a.SavedAt)
+	if t, err := time.Parse(time.RFC3339, a.SavedAt); err == nil {
+		fmt.Printf("Age:        %s\n", formatAge(time.Since(t)))
+	}
 	fmt.Printf("Has API key: %v\n", a.APIKey != "")
 
 	fmt.Println("\nTesting authentication...")
@@ -73,6 +78,18 @@ func runAuthCheck(ctx context.Context) error {
 	}
 	fmt.Println("Authentication is valid.")
 	return nil
+}
+
+func formatAge(d time.Duration) string {
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes", int(math.Round(d.Minutes())))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%.1f hours", d.Hours())
+	default:
+		days := d.Hours() / 24
+		return fmt.Sprintf("%.1f days", days)
+	}
 }
 
 func runAuthSetup(ctx context.Context, authUser int) error {
