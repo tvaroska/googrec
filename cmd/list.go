@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/boris/googrec/internal/api"
+	"github.com/tvaroska/googrec/internal/api"
 	"github.com/spf13/cobra"
 )
 

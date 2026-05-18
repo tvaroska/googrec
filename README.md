@@ -6,14 +6,27 @@ Single compiled Go binary. No runtime dependencies.
 
 ## Install
 
+### Download binary
+
+Grab the latest release for your platform from [GitHub Releases](https://github.com/tvaroska/googrec/releases):
+
 ```bash
-go install github.com/boris/googrec@latest
+# Example: Linux amd64
+curl -Lo googrec.tar.gz https://github.com/tvaroska/googrec/releases/latest/download/googrec_linux_amd64.tar.gz
+tar xzf googrec.tar.gz
+sudo mv googrec /usr/local/bin/
 ```
 
-Or build from source:
+### Go install
 
 ```bash
-git clone https://github.com/boris/googrec.git
+go install github.com/tvaroska/googrec@latest
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/tvaroska/googrec.git
 cd googrec
 make build
 ```
@@ -110,7 +123,9 @@ googrec search "meeting" -n 5 --json
 ```bash
 googrec download                          # current dir, up to 50
 googrec download -o ./transcripts -n 100  # custom dir and limit
-googrec download --since 2025-01-01       # date filter
+googrec download --since 2025-01-01       # after date
+googrec download --until 2025-06-01       # before date
+googrec download --since 2025-01-01 --until 2025-06-01  # date range
 googrec download --skip-existing          # incremental
 googrec download --format json            # JSON format
 googrec download --concurrency 5          # parallel downloads
@@ -120,7 +135,8 @@ googrec download --concurrency 5          # parallel downloads
 
 ```bash
 googrec download-audio -o ./audio
-googrec download-audio --since 2025-06-01 --skip-existing
+googrec download-audio --since 2025-06-01 --until 2025-12-01  # date range
+googrec download-audio --skip-existing
 googrec download-audio --concurrency 5
 ```
 
@@ -128,6 +144,12 @@ googrec download-audio --concurrency 5
 
 ```bash
 googrec config
+```
+
+### Version
+
+```bash
+googrec --version
 ```
 
 ## Troubleshooting

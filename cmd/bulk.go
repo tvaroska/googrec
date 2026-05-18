@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/boris/googrec/internal/api"
+	"github.com/tvaroska/googrec/internal/api"
 )
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9 _-]`)
@@ -29,27 +29,57 @@ type bulkConfig struct {
 	outDir       string
 	limit        int
 	since        string
+	until        string
 	skipExisting bool
 	concurrency  int
 }
 
-func filterBySince(recordings []api.Recording, since string) ([]api.Recording, error) {
-	if since == "" {
-		return recordings, nil
-	}
-	sinceDate, err := time.Parse("2006-01-02", since)
+func parseDate(s string) (time.Time, error) {
+	t, err := time.Parse("2006-01-02", s)
 	if err != nil {
-		sinceDate, err = time.Parse(time.RFC3339, since)
+		t, err = time.Parse(time.RFC3339, s)
 		if err != nil {
-			return nil, fmt.Errorf("invalid date %q — use YYYY-MM-DD or ISO 8601", since)
+			return time.Time{}, fmt.Errorf("invalid date %q — use YYYY-MM-DD or ISO 8601", s)
 		}
 	}
+	return t, nil
+}
+
+func filterByDateRange(recordings []api.Recording, since, until string) ([]api.Recording, error) {
+	if since == "" && until == "" {
+		return recordings, nil
+	}
+
+	var sinceDate, untilDate time.Time
+	var err error
+
+	if since != "" {
+		sinceDate, err = parseDate(since)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if until != "" {
+		untilDate, err = parseDate(until)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if since != "" && until != "" && !untilDate.After(sinceDate) {
+		return nil, fmt.Errorf("--until (%s) must be after --since (%s)", until, since)
+	}
+
 	var filtered []api.Recording
 	for _, r := range recordings {
 		t, _ := time.Parse(time.RFC3339, r.Date)
-		if !t.Before(sinceDate) {
-			filtered = append(filtered, r)
+		if since != "" && t.Before(sinceDate) {
+			continue
 		}
+		if until != "" && !t.Before(untilDate) {
+			continue
+		}
+		filtered = append(filtered, r)
 	}
 	return filtered, nil
 }
@@ -72,7 +102,7 @@ func runBulkDownload(
 	client *api.Client,
 	cfg bulkConfig,
 	ext string,
-	downloadFn func(client *api.Client, r api.Recording, filepath string) (string, error),
+	downloadFn func(ctx context.Context, client *api.Client, r api.Recording, filepath string) (string, error),
 ) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt)
 	defer stop()
@@ -91,7 +121,7 @@ func runBulkDownload(
 		return err
 	}
 
-	recordings, err = filterBySince(recordings, cfg.since)
+	recordings, err = filterByDateRange(recordings, cfg.since, cfg.until)
 	if err != nil {
 		return err
 	}
@@ -145,7 +175,7 @@ func runBulkDownload(
 					resultCh <- downloadResult{job.index, job.recording.Title, "skipped", "cancelled"}
 					continue
 				}
-				detail, err := downloadFn(client, job.recording, job.filepath)
+				detail, err := downloadFn(ctx, client, job.recording, job.filepath)
 				if err != nil {
 					resultCh <- downloadResult{job.index, job.recording.Title, "failed", err.Error()}
 				} else if detail == "skipped" {

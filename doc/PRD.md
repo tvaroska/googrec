@@ -32,12 +32,12 @@ Build a clean, tested, single-binary CLI tool in Go that connects to Google Reco
 
 ### In Scope
 
-- CLI commands: `auth`, `list`, `info`, `transcript`, `search`, `download`, `audio`, `download-audio`, `config`
+- CLI commands: `auth`, `list`, `info`, `transcript`, `search`, `download`, `audio`, `download-audio`, `config`, `--version`
 - Manual cookie-paste authentication (cookies + API key from Chrome DevTools)
 - SAPISIDHASH authentication for the gRPC-web API
 - Concurrent bulk downloads with configurable parallelism
 - JSON and plain text output formats
-- Date filtering, skip-existing, and limit options for bulk operations
+- Date range filtering (`--since`, `--until`), skip-existing, and limit options for bulk operations
 - Input validation (UUID format, positive integers, valid dates)
 - Unit tests for core logic
 
@@ -156,6 +156,7 @@ Client-side title filtering across the most recent 100 recordings.
 | `-o, --output <dir>` | Output directory (default: `.`) |
 | `-n, --limit <N>` | Maximum recordings (default: 50) |
 | `--since <date>` | Only recordings after date (YYYY-MM-DD or ISO 8601) |
+| `--until <date>` | Only recordings before date (YYYY-MM-DD or ISO 8601) |
 | `--format <fmt>` | Output format: `txt` or `json` (default: `txt`) |
 | `--json` | Alias for `--format json` |
 | `--skip-existing` | Skip recordings with existing output file |
@@ -176,6 +177,7 @@ Client-side title filtering across the most recent 100 recordings.
 | `-o, --output <dir>` | Output directory (default: `.`) |
 | `-n, --limit <N>` | Maximum recordings (default: 50) |
 | `--since <date>` | Only recordings after date |
+| `--until <date>` | Only recordings before date |
 | `--skip-existing` | Skip existing files |
 | `--concurrency <N>` | Parallel downloads (default: 3) |
 
@@ -256,6 +258,7 @@ googrec/
 │   ├── search.go            # search command
 │   ├── audio.go             # audio command
 │   ├── bulk.go              # shared bulk download logic
+│   ├── bulk_test.go         # unit tests for bulk utilities
 │   ├── download.go          # bulk transcript download
 │   └── download_audio.go    # bulk audio download
 ├── internal/
@@ -295,8 +298,9 @@ googrec/
 
 | Package | Coverage |
 |---------|----------|
-| `internal/auth` | Save/Load round-trip, SAPISID extraction, file permissions, API key preservation |
-| `internal/api` | SAPISIDHASH format, UUID validation, duration formatting, time formatting, response parsing |
+| `internal/auth` | Save/Load round-trip, SAPISID extraction, file permissions, API key preservation, env overrides |
+| `internal/api` | SAPISIDHASH format, UUID validation, duration formatting, time formatting, recording parsing, transcript parsing (multi-speaker, same-speaker merge, empty response, API errors), audio streaming (Content-Disposition, fallback filename, byte counting), RPC header verification |
+| `cmd` | Filename sanitization, date range filtering (since/until/both/RFC3339/invalid/reversed), date parsing |
 
 ### Manual Verification
 

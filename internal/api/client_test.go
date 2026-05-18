@@ -1,9 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/tvaroska/googrec/internal/auth"
 )
 
 func TestComputeSAPISIDHash(t *testing.T) {
@@ -122,5 +128,304 @@ func TestParseRecordingMissingWebID(t *testing.T) {
 
 	if r.ID != "device-id" {
 		t.Errorf("ID should fall back to deviceID, got %q", r.ID)
+	}
+}
+
+func TestParseRecordingTooFewFields(t *testing.T) {
+	raw := `["device-id","Title",["1706140050","0"]]`
+
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	_, err := parseRecording(items)
+	if err == nil {
+		t.Fatal("expected error for too few fields")
+	}
+}
+
+func TestParseRecordingEmptyTitle(t *testing.T) {
+	raw := `["device-id","",["1706140050","0"],["60","0"],0,0,""]`
+
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	r, err := parseRecording(items)
+	if err != nil {
+		t.Fatalf("parseRecording: %v", err)
+	}
+
+	if r.Title == "" {
+		t.Error("empty title should be replaced with formatted date")
+	}
+}
+
+func TestParseRecordingWithLocation(t *testing.T) {
+	raw := `["device-id","Meeting",["1706140050","0"],["60","0"],37.7749,-122.4194,"San Francisco",null,null,null,null,"",null,"bf3451e0-4ea6-424e-8e77-fbef4c0fe17c"]`
+
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	r, err := parseRecording(items)
+	if err != nil {
+		t.Fatalf("parseRecording: %v", err)
+	}
+
+	if r.Location != "San Francisco" {
+		t.Errorf("Location = %q, want %q", r.Location, "San Francisco")
+	}
+}
+
+func newTestClient(t *testing.T, server *httptest.Server) *Client {
+	t.Helper()
+	return &Client{
+		auth: &auth.AuthData{
+			SAPISID:  "test-sapisid",
+			Cookies:  "SAPISID=test-sapisid",
+			APIKey:   "test-key",
+			AuthUser: 0,
+		},
+		http: server.Client(),
+	}
+}
+
+func TestGetTranscriptParsing(t *testing.T) {
+	response := `[[
+		[
+			[["hello","Hello","0","500"],["world","world.","500","1000"]],
+			0,
+			"en"
+		],
+		[
+			[["goodbye","Goodbye","2000","2500"],["now","now.","2500","3000"]],
+			1,
+			"en"
+		]
+	]]`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	transcript, err := client.GetTranscript(context.Background(), "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c")
+	if err != nil {
+		t.Fatalf("GetTranscript: %v", err)
+	}
+	if transcript == nil {
+		t.Fatal("expected transcript, got nil")
+	}
+
+	if len(transcript.Segments) != 2 {
+		t.Fatalf("expected 2 segments, got %d", len(transcript.Segments))
+	}
+
+	if transcript.Segments[0].Speaker != "Speaker 1" {
+		t.Errorf("segment 0 speaker = %q, want %q", transcript.Segments[0].Speaker, "Speaker 1")
+	}
+	if transcript.Segments[0].Text != "Hello world." {
+		t.Errorf("segment 0 text = %q, want %q", transcript.Segments[0].Text, "Hello world.")
+	}
+	if transcript.Segments[0].StartTime != "00:00" {
+		t.Errorf("segment 0 startTime = %q, want %q", transcript.Segments[0].StartTime, "00:00")
+	}
+
+	if transcript.Segments[1].Speaker != "Speaker 2" {
+		t.Errorf("segment 1 speaker = %q, want %q", transcript.Segments[1].Speaker, "Speaker 2")
+	}
+	if transcript.Segments[1].Text != "Goodbye now." {
+		t.Errorf("segment 1 text = %q, want %q", transcript.Segments[1].Text, "Goodbye now.")
+	}
+	if transcript.Segments[1].StartTime != "00:02" {
+		t.Errorf("segment 1 startTime = %q, want %q", transcript.Segments[1].StartTime, "00:02")
+	}
+
+	if !strings.Contains(transcript.RawText, "[Speaker 1]") {
+		t.Error("RawText should contain speaker labels")
+	}
+}
+
+func TestGetTranscriptSameSpeakerMerge(t *testing.T) {
+	response := `[[
+		[
+			[["first","First","0","500"]],
+			0,
+			"en"
+		],
+		[
+			[["second","second","500","1000"]],
+			0,
+			"en"
+		]
+	]]`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	transcript, err := client.GetTranscript(context.Background(), "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c")
+	if err != nil {
+		t.Fatalf("GetTranscript: %v", err)
+	}
+
+	if len(transcript.Segments) != 1 {
+		t.Fatalf("same speaker segments should merge, got %d segments", len(transcript.Segments))
+	}
+	if transcript.Segments[0].Text != "First second" {
+		t.Errorf("merged text = %q, want %q", transcript.Segments[0].Text, "First second")
+	}
+}
+
+func TestGetTranscriptEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	transcript, err := client.GetTranscript(context.Background(), "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c")
+	if err != nil {
+		t.Fatalf("GetTranscript: %v", err)
+	}
+	if transcript != nil {
+		t.Errorf("expected nil for empty response, got %+v", transcript)
+	}
+}
+
+func TestGetTranscriptAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`unauthorized`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	_, err := client.GetTranscript(context.Background(), "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c")
+	if err == nil {
+		t.Fatal("expected error for 401 response")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should contain status code, got: %v", err)
+	}
+}
+
+func TestGetTranscriptInvalidUUID(t *testing.T) {
+	client := &Client{
+		auth: &auth.AuthData{},
+		http: http.DefaultClient,
+	}
+	_, err := client.GetTranscript(context.Background(), "not-a-uuid")
+	if err == nil {
+		t.Fatal("expected error for invalid UUID")
+	}
+}
+
+func TestGetAudioStreaming(t *testing.T) {
+	audioData := "fake-audio-content-for-test"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mp4")
+		w.Header().Set("Content-Disposition", `attachment; filename="recording.m4a"`)
+		w.Write([]byte(audioData))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origAudioBase := audioBase
+	defer func() { setAudioBase(origAudioBase) }()
+	setAudioBase(server.URL)
+
+	var buf strings.Builder
+	result, err := client.GetAudio(context.Background(), "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c", &buf)
+	if err != nil {
+		t.Fatalf("GetAudio: %v", err)
+	}
+
+	if buf.String() != audioData {
+		t.Errorf("audio data = %q, want %q", buf.String(), audioData)
+	}
+	if result.Filename != "recording.m4a" {
+		t.Errorf("filename = %q, want %q", result.Filename, "recording.m4a")
+	}
+	if result.ContentType != "audio/mp4" {
+		t.Errorf("content type = %q, want %q", result.ContentType, "audio/mp4")
+	}
+	if result.BytesWritten != int64(len(audioData)) {
+		t.Errorf("bytes written = %d, want %d", result.BytesWritten, len(audioData))
+	}
+}
+
+func TestGetAudioNoContentDisposition(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("audio"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origAudioBase := audioBase
+	defer func() { setAudioBase(origAudioBase) }()
+	setAudioBase(server.URL)
+
+	result, err := client.GetAudio(context.Background(), "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c", io.Discard)
+	if err != nil {
+		t.Fatalf("GetAudio: %v", err)
+	}
+
+	if result.Filename != "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c.m4a" {
+		t.Errorf("filename should fall back to ID.m4a, got %q", result.Filename)
+	}
+}
+
+func TestListRecordingsRPCHeaders(t *testing.T) {
+	var capturedHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	_, err := client.ListRecordings(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("ListRecordings: %v", err)
+	}
+
+	if ct := capturedHeaders.Get("Content-Type"); ct != "application/json+protobuf" {
+		t.Errorf("Content-Type = %q, want %q", ct, "application/json+protobuf")
+	}
+	if key := capturedHeaders.Get("X-Goog-Api-Key"); key != "test-key" {
+		t.Errorf("X-Goog-Api-Key = %q, want %q", key, "test-key")
+	}
+	auth := capturedHeaders.Get("Authorization")
+	if !strings.HasPrefix(auth, "SAPISIDHASH ") {
+		t.Errorf("Authorization should start with SAPISIDHASH, got %q", auth)
 	}
 }

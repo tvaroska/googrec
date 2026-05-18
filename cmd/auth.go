@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/boris/googrec/internal/api"
-	"github.com/boris/googrec/internal/auth"
+	"github.com/tvaroska/googrec/internal/api"
+	"github.com/tvaroska/googrec/internal/auth"
 	"github.com/spf13/cobra"
 )
 

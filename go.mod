@@ -1,4 +1,4 @@
-module github.com/boris/googrec
+module github.com/tvaroska/googrec
 
 go 1.25.0
 

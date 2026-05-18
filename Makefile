@@ -1,6 +1,6 @@
 BINARY := googrec
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -ldflags "-X github.com/boris/googrec/cmd.Version=$(VERSION)"
+LDFLAGS := -ldflags "-X github.com/tvaroska/googrec/cmd.Version=$(VERSION)"
 
 .PHONY: build test vet clean install
 

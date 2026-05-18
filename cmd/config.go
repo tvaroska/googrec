@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/boris/googrec/internal/auth"
+	"github.com/tvaroska/googrec/internal/auth"
 	"github.com/spf13/cobra"
 )
 

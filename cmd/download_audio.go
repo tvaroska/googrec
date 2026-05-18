@@ -1,10 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 
-	"github.com/boris/googrec/internal/api"
+	"github.com/tvaroska/googrec/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -13,6 +14,7 @@ func newDownloadAudioCmd() *cobra.Command {
 		outDir       string
 		limit        int
 		since        string
+		until        string
 		skipExisting bool
 		concurrency  int
 	)
@@ -34,16 +36,17 @@ func newDownloadAudioCmd() *cobra.Command {
 				outDir:       outDir,
 				limit:        limit,
 				since:        since,
+				until:        until,
 				skipExisting: skipExisting,
 				concurrency:  concurrency,
-			}, "m4a", func(client *api.Client, r api.Recording, filepath string) (string, error) {
+			}, "m4a", func(ctx context.Context, client *api.Client, r api.Recording, filepath string) (string, error) {
 				f, err := os.Create(filepath)
 				if err != nil {
 					return "", err
 				}
 				defer f.Close()
 
-				result, err := client.GetAudio(cmd.Context(), r.ID, f)
+				result, err := client.GetAudio(ctx, r.ID, f)
 				if err != nil {
 					os.Remove(filepath)
 					return "", err
@@ -57,6 +60,7 @@ func newDownloadAudioCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outDir, "output", "o", ".", "Output directory")
 	cmd.Flags().IntVarP(&limit, "limit", "n", 50, "Maximum recordings to process")
 	cmd.Flags().StringVar(&since, "since", "", "Only recordings after this date (YYYY-MM-DD or ISO 8601)")
+	cmd.Flags().StringVar(&until, "until", "", "Only recordings before this date (YYYY-MM-DD or ISO 8601)")
 	cmd.Flags().BoolVar(&skipExisting, "skip-existing", false, "Skip recordings that already have an audio file")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 3, "Number of concurrent downloads")
 

@@ -1,11 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/boris/googrec/internal/api"
+	"github.com/tvaroska/googrec/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -14,6 +15,7 @@ func newDownloadCmd() *cobra.Command {
 		outDir       string
 		limit        int
 		since        string
+		until        string
 		format       string
 		asJSON       bool
 		skipExisting bool
@@ -47,10 +49,11 @@ func newDownloadCmd() *cobra.Command {
 				outDir:       outDir,
 				limit:        limit,
 				since:        since,
+				until:        until,
 				skipExisting: skipExisting,
 				concurrency:  concurrency,
-			}, ext, func(client *api.Client, r api.Recording, filepath string) (string, error) {
-				transcript, err := client.GetTranscript(cmd.Context(), r.ID)
+			}, ext, func(ctx context.Context, client *api.Client, r api.Recording, filepath string) (string, error) {
+				transcript, err := client.GetTranscript(ctx, r.ID)
 				if err != nil {
 					return "", err
 				}
@@ -83,6 +86,7 @@ func newDownloadCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outDir, "output", "o", ".", "Output directory")
 	cmd.Flags().IntVarP(&limit, "limit", "n", 50, "Maximum recordings to process")
 	cmd.Flags().StringVar(&since, "since", "", "Only recordings after this date (YYYY-MM-DD or ISO 8601)")
+	cmd.Flags().StringVar(&until, "until", "", "Only recordings before this date (YYYY-MM-DD or ISO 8601)")
 	cmd.Flags().StringVar(&format, "format", "txt", "Output format: txt or json")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Alias for --format json")
 	cmd.Flags().BoolVar(&skipExisting, "skip-existing", false, "Skip recordings that already have a transcript file")

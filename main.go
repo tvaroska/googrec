@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/boris/googrec/cmd"
+	"github.com/tvaroska/googrec/cmd"
 )
 
 func main() {

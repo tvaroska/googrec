@@ -11,13 +11,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/boris/googrec/internal/auth"
+	"github.com/tvaroska/googrec/internal/auth"
 )
 
-const (
-	apiBase = "https://pixelrecorder-pa.clients6.google.com/$rpc/java.com.google.wireless.android.pixel.recorder.protos.PlaybackService"
-	origin  = "https://recorder.google.com"
+var (
+	apiBase   = "https://pixelrecorder-pa.clients6.google.com/$rpc/java.com.google.wireless.android.pixel.recorder.protos.PlaybackService"
+	audioBase = "https://usercontent.recorder.google.com/download/playback"
 )
+
+const origin = "https://recorder.google.com"
+
+func setAPIBase(url string)   { apiBase = url }
+func setAudioBase(url string) { audioBase = url }
 
 var (
 	uuidRe       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -309,8 +314,8 @@ func (c *Client) GetAudio(ctx context.Context, recordingID string, dest io.Write
 		return nil, err
 	}
 
-	url := fmt.Sprintf("https://usercontent.recorder.google.com/download/playback/%s?authuser=%d&download=true",
-		recordingID, c.auth.AuthUser)
+	url := fmt.Sprintf("%s/%s?authuser=%d&download=true",
+		audioBase, recordingID, c.auth.AuthUser)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
