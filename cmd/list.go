@@ -12,15 +12,19 @@ import (
 
 func newListCmd() *cobra.Command {
 	var (
-		limit    int
-		asJSON   bool
+		limit  int
+		all    bool
+		asJSON bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List recent recordings",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if limit <= 0 {
+			fetchLimit := limit
+			if all {
+				fetchLimit = 0
+			} else if limit <= 0 {
 				return fmt.Errorf("--limit must be a positive integer")
 			}
 
@@ -29,7 +33,7 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 
-			recordings, err := client.ListRecordings(cmd.Context(), limit)
+			recordings, err := client.ListRecordings(cmd.Context(), fetchLimit)
 			if err != nil {
 				return err
 			}
@@ -61,6 +65,7 @@ func newListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVarP(&limit, "limit", "n", 20, "Maximum number of recordings")
+	cmd.Flags().BoolVar(&all, "all", false, "Fetch all recordings (paginate through all pages)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 
 	return cmd

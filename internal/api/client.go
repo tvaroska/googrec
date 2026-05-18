@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strings"
@@ -13,6 +14,12 @@ import (
 
 	"github.com/tvaroska/googrec/internal/auth"
 )
+
+const maxRetries = 3
+
+var defaultPageSize = 100
+
+var retryBaseDelay = 1 * time.Second
 
 var (
 	apiBase   = "https://pixelrecorder-pa.clients6.google.com/$rpc/java.com.google.wireless.android.pixel.recorder.protos.PlaybackService"
@@ -68,6 +75,16 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
+func isRetryable(statusCode int) bool {
+	return statusCode == 429 || statusCode >= 500
+}
+
+func retryDelay(attempt int) time.Duration {
+	delay := retryBaseDelay * (1 << attempt)
+	jitter := time.Duration(rand.Int63n(int64(delay) / 4))
+	return delay + jitter
+}
+
 func (c *Client) rpcRequest(ctx context.Context, method string, body any) ([]byte, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -75,47 +92,109 @@ func (c *Client) rpcRequest(ctx context.Context, method string, body any) ([]byt
 	}
 
 	url := apiBase + "/" + method
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(payload)))
-	if err != nil {
-		return nil, err
-	}
+	var lastErr error
 
-	req.Header.Set("Content-Type", "application/json+protobuf")
-	req.Header.Set("X-Goog-Api-Key", c.auth.APIKey)
-	req.Header.Set("Authorization", ComputeSAPISIDHash(c.auth.SAPISID))
-	req.Header.Set("X-Goog-AuthUser", fmt.Sprintf("%d", c.auth.AuthUser))
-	req.Header.Set("X-User-Agent", "grpc-web-javascript/0.1")
-	req.Header.Set("Origin", origin)
-	req.Header.Set("Referer", origin+"/")
-	req.Header.Set("Cookie", c.auth.Cookies)
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryDelay(attempt - 1)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request %s: %w", method, err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(payload)))
+		if err != nil {
+			return nil, err
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
+		req.Header.Set("Content-Type", "application/json+protobuf")
+		req.Header.Set("X-Goog-Api-Key", c.auth.APIKey)
+		req.Header.Set("Authorization", ComputeSAPISIDHash(c.auth.SAPISID))
+		req.Header.Set("X-Goog-AuthUser", fmt.Sprintf("%d", c.auth.AuthUser))
+		req.Header.Set("X-User-Agent", "grpc-web-javascript/0.1")
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Referer", origin+"/")
+		req.Header.Set("Cookie", c.auth.Cookies)
 
-	if resp.StatusCode != 200 {
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request %s: %w", method, err)
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("read response: %w", err)
+			continue
+		}
+
+		if resp.StatusCode == 200 {
+			return respBody, nil
+		}
+
 		preview := string(respBody)
 		if len(preview) > 200 {
 			preview = preview[:200]
 		}
-		return nil, fmt.Errorf("API %s: %d %s — %s", method, resp.StatusCode, resp.Status, preview)
+		lastErr = fmt.Errorf("API %s: %d %s — %s", method, resp.StatusCode, resp.Status, preview)
+
+		if !isRetryable(resp.StatusCode) {
+			return nil, lastErr
+		}
 	}
 
-	return respBody, nil
+	return nil, fmt.Errorf("%w (after %d retries)", lastErr, maxRetries)
 }
 
+// ListRecordings fetches recordings with automatic pagination.
+// limit=0 means fetch all recordings.
 func (c *Client) ListRecordings(ctx context.Context, limit int) ([]Recording, error) {
-	nowSec := time.Now().Unix()
+	var all []Recording
+	cursor := time.Now().Unix()
+
+	for {
+		fetchSize := defaultPageSize
+		if limit > 0 {
+			remaining := limit - len(all)
+			if remaining < fetchSize {
+				fetchSize = remaining
+			}
+		}
+
+		page, err := c.fetchRecordingPage(ctx, cursor, fetchSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+
+		all = append(all, page...)
+
+		if limit > 0 && len(all) >= limit {
+			all = all[:limit]
+			break
+		}
+
+		if len(page) < fetchSize {
+			break
+		}
+
+		last := page[len(page)-1]
+		t, _ := time.Parse(time.RFC3339, last.Date)
+		cursor = t.Unix()
+	}
+
+	return all, nil
+}
+
+func (c *Client) fetchRecordingPage(ctx context.Context, cursor int64, size int) ([]Recording, error) {
 	body := []any{
-		[]any{map[string]any{"1": nowSec}},
-		limit,
+		[]any{map[string]any{"1": cursor}},
+		size,
 	}
 
 	data, err := c.rpcRequest(ctx, "GetRecordingList", body)
@@ -143,10 +222,6 @@ func (c *Client) ListRecordings(ctx context.Context, limit int) ([]Recording, er
 			continue
 		}
 		recordings = append(recordings, r)
-	}
-
-	if limit > 0 && len(recordings) > limit {
-		recordings = recordings[:limit]
 	}
 	return recordings, nil
 }
@@ -317,50 +392,70 @@ func (c *Client) GetAudio(ctx context.Context, recordingID string, dest io.Write
 	url := fmt.Sprintf("%s/%s?authuser=%d&download=true",
 		audioBase, recordingID, c.auth.AuthUser)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Cookie", c.auth.Cookies)
-	req.Header.Set("Referer", origin+"/")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("audio download: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		errBody, _ := io.ReadAll(resp.Body)
-		preview := string(errBody)
-		if len(preview) > 200 {
-			preview = preview[:200]
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryDelay(attempt - 1)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
 		}
-		return nil, fmt.Errorf("audio download: %d %s — %s", resp.StatusCode, resp.Status, preview)
-	}
 
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "audio/mp4"
-	}
-
-	filename := recordingID + ".m4a"
-	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
-		if m := cdFilenameRe.FindStringSubmatch(cd); m != nil {
-			filename = m[1]
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
 		}
+		req.Header.Set("Cookie", c.auth.Cookies)
+		req.Header.Set("Referer", origin+"/")
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("audio download: %w", err)
+			continue
+		}
+
+		if resp.StatusCode != 200 {
+			errBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			preview := string(errBody)
+			if len(preview) > 200 {
+				preview = preview[:200]
+			}
+			lastErr = fmt.Errorf("audio download: %d %s — %s", resp.StatusCode, resp.Status, preview)
+			if !isRetryable(resp.StatusCode) {
+				return nil, lastErr
+			}
+			continue
+		}
+
+		contentType := resp.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "audio/mp4"
+		}
+
+		filename := recordingID + ".m4a"
+		if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+			if m := cdFilenameRe.FindStringSubmatch(cd); m != nil {
+				filename = m[1]
+			}
+		}
+
+		n, err := io.Copy(dest, resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("stream audio: %w", err)
+		}
+
+		return &AudioResult{
+			ContentType:  contentType,
+			Filename:     filename,
+			BytesWritten: n,
+		}, nil
 	}
 
-	n, err := io.Copy(dest, resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("stream audio: %w", err)
-	}
-
-	return &AudioResult{
-		ContentType:  contentType,
-		Filename:     filename,
-		BytesWritten: n,
-	}, nil
+	return nil, fmt.Errorf("%w (after %d retries)", lastErr, maxRetries)
 }
 
 func (c *Client) TestAuth(ctx context.Context) error {

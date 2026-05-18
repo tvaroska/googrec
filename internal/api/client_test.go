@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tvaroska/googrec/internal/auth"
 )
@@ -397,6 +399,232 @@ func TestGetAudioNoContentDisposition(t *testing.T) {
 
 	if result.Filename != "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c.m4a" {
 		t.Errorf("filename should fall back to ID.m4a, got %q", result.Filename)
+	}
+}
+
+func disableRetryDelay(t *testing.T) {
+	t.Helper()
+	orig := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	t.Cleanup(func() { retryBaseDelay = orig })
+}
+
+func TestRetryOnServerError(t *testing.T) {
+	disableRetryDelay(t)
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(500)
+			w.Write([]byte(`internal error`))
+			return
+		}
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	_, err := client.ListRecordings(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestRetryExhausted(t *testing.T) {
+	disableRetryDelay(t)
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(503)
+		w.Write([]byte(`unavailable`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	_, err := client.ListRecordings(context.Background(), 5)
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if !strings.Contains(err.Error(), "after 3 retries") {
+		t.Errorf("error should mention retries, got: %v", err)
+	}
+	if attempts != 4 {
+		t.Errorf("expected 4 attempts (1 + 3 retries), got %d", attempts)
+	}
+}
+
+func TestNoRetryOn4xx(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(403)
+		w.Write([]byte(`forbidden`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	_, err := client.ListRecordings(context.Background(), 5)
+	if err == nil {
+		t.Fatal("expected error on 403")
+	}
+	if attempts != 1 {
+		t.Errorf("should not retry 403, got %d attempts", attempts)
+	}
+}
+
+func TestRetryOn429(t *testing.T) {
+	disableRetryDelay(t)
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(429)
+			w.Write([]byte(`rate limited`))
+			return
+		}
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	_, err := client.ListRecordings(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("expected success after 429 retry, got: %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func makeRecordingJSON(id, title string, timestampSec int64) string {
+	return fmt.Sprintf(`["%s","%s",["%d","0"],["60","0"],0,0,"",null,null,null,null,"",null,"%s"]`,
+		id, title, timestampSec, id)
+}
+
+func setPageSize(t *testing.T, size int) {
+	t.Helper()
+	orig := defaultPageSize
+	defaultPageSize = size
+	t.Cleanup(func() { defaultPageSize = orig })
+}
+
+func TestPagination(t *testing.T) {
+	setPageSize(t, 2)
+	page1 := fmt.Sprintf(`[[%s,%s]]`,
+		makeRecordingJSON("aaaaaaaa-1111-1111-1111-111111111111", "First", 1700000000),
+		makeRecordingJSON("bbbbbbbb-2222-2222-2222-222222222222", "Second", 1699000000))
+	page2 := fmt.Sprintf(`[[%s]]`,
+		makeRecordingJSON("cccccccc-3333-3333-3333-333333333333", "Third", 1698000000))
+
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.Write([]byte(page1))
+		} else {
+			w.Write([]byte(page2))
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	recordings, err := client.ListRecordings(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListRecordings: %v", err)
+	}
+
+	if len(recordings) != 3 {
+		t.Fatalf("expected 3 recordings across 2 pages, got %d", len(recordings))
+	}
+	if recordings[0].Title != "First" || recordings[2].Title != "Third" {
+		t.Errorf("unexpected order: %v", recordings)
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 API calls, got %d", callCount)
+	}
+}
+
+func TestPaginationWithLimit(t *testing.T) {
+	page := fmt.Sprintf(`[[%s,%s]]`,
+		makeRecordingJSON("aaaaaaaa-1111-1111-1111-111111111111", "First", 1700000000),
+		makeRecordingJSON("bbbbbbbb-2222-2222-2222-222222222222", "Second", 1699000000))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(page))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origBase := apiBase
+	defer func() { setAPIBase(origBase) }()
+	setAPIBase(server.URL)
+
+	recordings, err := client.ListRecordings(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ListRecordings: %v", err)
+	}
+
+	if len(recordings) != 1 {
+		t.Fatalf("expected 1 recording with limit=1, got %d", len(recordings))
+	}
+}
+
+func TestGetAudioRetry(t *testing.T) {
+	disableRetryDelay(t)
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(500)
+			w.Write([]byte(`error`))
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mp4")
+		w.Write([]byte("audio-data"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	origAudioBase := audioBase
+	defer func() { setAudioBase(origAudioBase) }()
+	setAudioBase(server.URL)
+
+	var buf strings.Builder
+	result, err := client.GetAudio(context.Background(), "bf3451e0-4ea6-424e-8e77-fbef4c0fe17c", &buf)
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if buf.String() != "audio-data" {
+		t.Errorf("audio data = %q", buf.String())
+	}
+	if result.BytesWritten != 10 {
+		t.Errorf("bytes = %d, want 10", result.BytesWritten)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
 	}
 }
 

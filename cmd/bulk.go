@@ -115,7 +115,11 @@ func runBulkDownload(
 		return err
 	}
 
-	fmt.Printf("Fetching recording list (limit: %d)...\n", cfg.limit)
+	if cfg.limit == 0 {
+		fmt.Println("Fetching all recordings...")
+	} else {
+		fmt.Printf("Fetching recording list (limit: %d)...\n", cfg.limit)
+	}
 	recordings, err := client.ListRecordings(ctx, cfg.limit)
 	if err != nil {
 		return err

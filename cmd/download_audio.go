@@ -13,6 +13,7 @@ func newDownloadAudioCmd() *cobra.Command {
 	var (
 		outDir       string
 		limit        int
+		all          bool
 		since        string
 		until        string
 		skipExisting bool
@@ -23,7 +24,9 @@ func newDownloadAudioCmd() *cobra.Command {
 		Use:   "download-audio",
 		Short: "Bulk download audio files for multiple recordings",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if limit <= 0 {
+			if all {
+				limit = 0
+			} else if limit <= 0 {
 				return fmt.Errorf("--limit must be a positive integer")
 			}
 
@@ -59,6 +62,7 @@ func newDownloadAudioCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&outDir, "output", "o", ".", "Output directory")
 	cmd.Flags().IntVarP(&limit, "limit", "n", 50, "Maximum recordings to process")
+	cmd.Flags().BoolVar(&all, "all", false, "Download all recordings (paginate through all pages)")
 	cmd.Flags().StringVar(&since, "since", "", "Only recordings after this date (YYYY-MM-DD or ISO 8601)")
 	cmd.Flags().StringVar(&until, "until", "", "Only recordings before this date (YYYY-MM-DD or ISO 8601)")
 	cmd.Flags().BoolVar(&skipExisting, "skip-existing", false, "Skip recordings that already have an audio file")
